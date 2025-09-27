@@ -23,13 +23,6 @@ async def init_db(pool):
             UNIQUE (tg_id, base, target)
         );
         """)
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS user_preferences (
-            tg_id BIGINT PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
-            base_currency VARCHAR(10) DEFAULT 'USD',
-            target_currency VARCHAR(10) DEFAULT 'UAH'
-        );
-        """)
 
 async def upsert_user(pool, user):
     async with pool.acquire() as conn:
@@ -53,29 +46,3 @@ async def remove_favorite(pool, tg_id, fav_id):
     async with pool.acquire() as conn:
         res = await conn.execute("DELETE FROM favorites WHERE id=$1 AND tg_id=$2", fav_id, tg_id)
         return res
-
-async def set_user_preferences(pool, tg_id, base_currency=None, target_currency=None):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT base_currency, target_currency FROM user_preferences WHERE tg_id=$1", tg_id)
-        if row:
-            base_currency = base_currency or row['base_currency']
-            target_currency = target_currency or row['target_currency']
-            await conn.execute("""
-                UPDATE user_preferences
-                SET base_currency=$1, target_currency=$2
-                WHERE tg_id=$3
-            """, base_currency, target_currency, tg_id)
-        else:
-            base_currency = base_currency or 'USD'
-            target_currency = target_currency or 'UAH'
-            await conn.execute("""
-                INSERT INTO user_preferences (tg_id, base_currency, target_currency)
-                VALUES($1, $2, $3)
-            """, tg_id, base_currency, target_currency)
-
-async def get_user_preferences(pool, tg_id):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT base_currency, target_currency FROM user_preferences WHERE tg_id=$1", tg_id)
-        if row:
-            return row['base_currency'], row['target_currency']
-        return None, None

@@ -1,5 +1,4 @@
 import logging
-import asyncio
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
@@ -43,7 +42,7 @@ def get_currency_keyboard(prefix: str):
 
 @dp.message_handler(commands=['start', 'menu'], state="*")
 async def cmd_start_help_menu(message: types.Message, state: FSMContext):
-    await state.finish() # скидаємо будь-який попередній стан
+    await state.finish()
     await upsert_user(pool, message.from_user)
     await message.reply(
         "Привіт! Я — валютний бот. Обери валюту для конвертації 👇",
@@ -85,13 +84,11 @@ async def set_base_currency(callback_query: types.CallbackQuery, state: FSMConte
 async def set_target_currency(callback_query: types.CallbackQuery, state: FSMContext):
     currency = callback_query.data.split('_')[1]
     await state.update_data(target=currency)
-
     data = await state.get_data()
     base_currency = data.get('base')
     if not base_currency:
         await callback_query.answer("Будь ласка, спочатку оберіть першу валюту.", show_alert=True)
         return
-
     await bot.edit_message_text(
         f"Ти обрав пару **{base_currency}** → **{currency}**.\n\nТепер введи суму, яку хочеш конвертувати:",
         callback_query.message.chat.id,
@@ -107,16 +104,13 @@ async def process_amount(message: types.Message, state: FSMContext):
     except ValueError:
         await message.reply("Це не схоже на число. Будь ласка, введи коректну суму.")
         return
-
     user_data = await state.get_data()
     base = user_data.get('base')
     target = user_data.get('target')
-
     if not base or not target:
         await message.reply("Щось пішло не так. Будь ласка, почни знову, вибравши валюти.")
         await state.finish()
         return
-
     try:
         data = await api_convert(base, target, amount)
         result = data['result']
@@ -124,11 +118,9 @@ async def process_amount(message: types.Message, state: FSMContext):
         msg = f"**{amount} {base}** = **{result:.4f} {target}**"
         if rate:
             msg += f"\n\nКурс: 1 {base} = {rate:.6f} {target}"
-
         keyboard = InlineKeyboardMarkup(row_width=1)
         keyboard.add(InlineKeyboardButton("Додати в улюблені", callback_data=f"addfav_{base}_{target}"))
         keyboard.add(InlineKeyboardButton("Назад в головне меню", callback_data="main_menu"))
-        
         await message.reply(
             msg,
             reply_markup=keyboard,
@@ -160,7 +152,6 @@ async def list_fav_from_menu(callback_query: types.CallbackQuery, state: FSMCont
     await state.finish()
     await upsert_user(pool, callback_query.from_user)
     rows = await list_favorites(pool, callback_query.from_user.id)
-    
     if not rows:
         keyboard = InlineKeyboardMarkup(row_width=1)
         keyboard.add(InlineKeyboardButton("Назад в головне меню", callback_data="main_menu"))
@@ -171,12 +162,10 @@ async def list_fav_from_menu(callback_query: types.CallbackQuery, state: FSMCont
             reply_markup=keyboard
         )
         return
-    
     keyboard = InlineKeyboardMarkup(row_width=1)
     for r in rows:
         keyboard.add(InlineKeyboardButton(f"{r['base']} → {r['target']}", callback_data=f"showfav_{r['id']}"))
     keyboard.add(InlineKeyboardButton("Назад в головне меню", callback_data="main_menu"))
-
     await bot.edit_message_text(
         "Твої улюблені пари:",
         callback_query.message.chat.id,
@@ -190,23 +179,19 @@ async def show_fav_from_callback(callback_query: types.CallbackQuery, state: FSM
     fav_id = int(callback_query.data.split('_')[1])
     rows = await list_favorites(pool, callback_query.from_user.id)
     fav = next((r for r in rows if r['id'] == fav_id), None)
-    
     if not fav:
         await callback_query.answer("Вибрана улюблена пара не знайдена.", show_alert=True)
         return
-
     base = fav['base']
     target = fav['target']
-
     try:
         data = await api_convert(base, target, 1)
         rate = data.get('rate')
         msg = f"Курс для улюбленої пари:\n1 **{base}** = **{rate:.6f} {target}**"
-        
         keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(InlineKeyboardButton("Конвертувати", callback_data=f"convert_from_fav_{base}_{target}"))
         keyboard.add(InlineKeyboardButton("Видалити з улюблених", callback_data=f"delfav_{fav_id}"))
         keyboard.add(InlineKeyboardButton("Назад до списку улюблених", callback_data="list_fav_menu"))
-        
         await bot.edit_message_text(
             msg,
             callback_query.message.chat.id,
@@ -217,6 +202,19 @@ async def show_fav_from_callback(callback_query: types.CallbackQuery, state: FSM
     except Exception as e:
         logger.exception("convert failed")
         await bot.send_message(callback_query.message.chat.id, f"Помилка при конвертації: {e}")
+
+@dp.callback_query_handler(lambda c: c.data.startswith('convert_from_fav_'), state="*")
+async def convert_from_fav(callback_query: types.CallbackQuery, state: FSMContext):
+    _, _, _, base, target = callback_query.data.split('_')
+    
+    await state.update_data(base=base, target=target)
+    await bot.edit_message_text(
+        f"Ти обрав пару **{base}** → **{target}**.\n\nТепер введи суму, яку хочеш конвертувати:",
+        callback_query.message.chat.id,
+        callback_query.message.message_id,
+        parse_mode="Markdown"
+    )
+    await ConversionStates.waiting_for_amount.set()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('delfav_'), state="*")
 async def delete_fav_from_callback(callback_query: types.CallbackQuery, state: FSMContext):
