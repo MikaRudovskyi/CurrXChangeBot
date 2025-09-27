@@ -1,4 +1,5 @@
 import logging
+import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.dispatcher.filters.state import State, StatesGroup
@@ -23,38 +24,48 @@ CURRENCIES = ["USD", "EUR", "UAH", "PLN", "GBP", "JPY", "CHF", "CAD", "AUD"]
 class ConversionStates(StatesGroup):
     waiting_for_amount = State()
 
-async def safe_edit_message(
-    message: types.Message,
-    text: str,
-    reply_markup=None,
-    parse_mode=None
-):
+favorites_cache = {}
+rate_cache = {}
+
+CACHE_TTL = 60
+
+async def safe_edit_message(message: types.Message, text: str, reply_markup=None, parse_mode=None):
     try:
-        await message.edit_text(
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
-        )
+        await message.edit_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
     except Exception as e:
         if "Message is not modified" in str(e):
             return
-        logger.exception("edit_message_text failed")
-        raise
+
+def make_keyboard(buttons, row_width=1, back_button=True):
+    kb = InlineKeyboardMarkup(row_width=row_width)
+    kb.add(*[InlineKeyboardButton(text, callback_data=data) for text, data in buttons])
+    if back_button:
+        kb.add(InlineKeyboardButton("Назад в головне меню", callback_data="main_menu"))
+    return kb
 
 def get_main_menu_keyboard():
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        InlineKeyboardButton("Вибрати першу валюту", callback_data="select_base"),
-        InlineKeyboardButton("Список улюблених", callback_data="list_fav_menu")
-    )
-    return keyboard
+    return make_keyboard([
+        ("Вибрати першу валюту", "select_base"),
+        ("Список улюблених", "list_fav_menu")
+    ], row_width=2, back_button=False)
 
 def get_currency_keyboard(prefix: str):
-    keyboard = InlineKeyboardMarkup(row_width=3)
-    buttons = [InlineKeyboardButton(c, callback_data=f"{prefix}_{c}") for c in CURRENCIES]
-    keyboard.add(*buttons)
-    keyboard.add(InlineKeyboardButton("Назад в головне меню", callback_data="main_menu"))
-    return keyboard
+    buttons = [(c, f"{prefix}_{c}") for c in CURRENCIES]
+    return make_keyboard(buttons, row_width=3, back_button=True)
+
+async def update_favorites_cache(user_id: int):
+    rows = await list_favorites(pool, user_id)
+    favorites_cache[user_id] = rows
+    return rows
+
+async def get_rate(base, target):
+    key = (base, target)
+    now = time.time()
+    if key in rate_cache and now - rate_cache[key][1] < CACHE_TTL:
+        return rate_cache[key][0]
+    data = await api_convert(base, target, 1)
+    rate_cache[key] = (data.get('rate'), now)
+    return data.get('rate')
 
 @dp.message_handler(commands=['start', 'menu'], state="*")
 async def cmd_start_help_menu(message: types.Message, state: FSMContext):
@@ -68,22 +79,13 @@ async def cmd_start_help_menu(message: types.Message, state: FSMContext):
 @dp.callback_query_handler(lambda c: c.data == 'main_menu', state="*")
 async def back_to_main_menu(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
-    await safe_edit_message(
-        callback_query.message,
-        "Обери валюту для конвертації 👇",
-        reply_markup=get_main_menu_keyboard()
-    )
+    await safe_edit_message(callback_query.message, "Обери валюту для конвертації 👇", reply_markup=get_main_menu_keyboard())
     await callback_query.answer()
-
 
 @dp.callback_query_handler(lambda c: c.data == 'select_base', state="*")
 async def select_base_currency(callback_query: types.CallbackQuery, state: FSMContext):
     await state.update_data(base=None, target=None)
-    await safe_edit_message(
-        callback_query.message,
-        "Обери першу (базову) валюту:",
-        reply_markup=get_currency_keyboard('base')
-    )
+    await safe_edit_message(callback_query.message, "Обери першу (базову) валюту:", reply_markup=get_currency_keyboard('base'))
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('base_'), state="*")
@@ -97,7 +99,6 @@ async def set_base_currency(callback_query: types.CallbackQuery, state: FSMConte
         parse_mode="Markdown"
     )
     await callback_query.answer()
-
 
 @dp.callback_query_handler(lambda c: c.data.startswith('target_'), state="*")
 async def set_target_currency(callback_query: types.CallbackQuery, state: FSMContext):
@@ -123,7 +124,6 @@ async def process_amount(message: types.Message, state: FSMContext):
     except ValueError:
         await message.reply("Це не схоже на число. Будь ласка, введи коректну суму.")
         return
-
     user_data = await state.get_data()
     base = user_data.get('base')
     target = user_data.get('target')
@@ -136,14 +136,13 @@ async def process_amount(message: types.Message, state: FSMContext):
         data = await api_convert(base, target, amount)
         result = data['result']
         rate = data.get('rate')
-
         msg = f"**{amount} {base}** = **{result:.4f} {target}**"
         if rate:
             msg += f"\n\nКурс: 1 {base} = {rate:.6f} {target}"
 
-        keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("Додати в улюблені", callback_data=f"addfav_{base}_{target}"))
-        keyboard.add(InlineKeyboardButton("Назад в головне меню", callback_data="main_menu"))
+        keyboard = make_keyboard([
+            (f"Додати в улюблені", f"addfav_{base}_{target}")
+        ], row_width=1, back_button=True)
 
         await message.reply(msg, reply_markup=keyboard, parse_mode="Markdown")
     except Exception as e:
@@ -152,93 +151,63 @@ async def process_amount(message: types.Message, state: FSMContext):
     finally:
         await state.finish()
 
-
 @dp.callback_query_handler(lambda c: c.data.startswith('addfav_'), state="*")
 async def add_fav_from_callback(callback_query: types.CallbackQuery, state: FSMContext):
     _, base, target = callback_query.data.split('_')
     await upsert_user(pool, callback_query.from_user)
     await add_favorite(pool, callback_query.from_user.id, base, target)
+    await update_favorites_cache(callback_query.from_user.id)
     await callback_query.answer(f"Пара {base} → {target} додана у фаворити.", show_alert=True)
     await state.finish()
-    await safe_edit_message(
-        callback_query.message,
-        f"Пара **{base}** → **{target}** додана в улюблені.",
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode="Markdown"
-    )
+    await safe_edit_message(callback_query.message, f"Пара **{base}** → **{target}** додана в улюблені.", reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
 
 @dp.callback_query_handler(lambda c: c.data == 'list_fav_menu', state="*")
 async def list_fav_from_menu(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
     await upsert_user(pool, callback_query.from_user)
-    rows = await list_favorites(pool, callback_query.from_user.id)
+    rows = favorites_cache.get(callback_query.from_user.id) or await update_favorites_cache(callback_query.from_user.id)
 
     if not rows:
-        keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("Назад в головне меню", callback_data="main_menu"))
-        await safe_edit_message(
-            callback_query.message,
-            "У тебе немає улюблених пар.",
-            reply_markup=keyboard
-        )
+        keyboard = make_keyboard([], row_width=1)
+        await safe_edit_message(callback_query.message, "У тебе немає улюблених пар.", reply_markup=keyboard)
         await callback_query.answer()
         return
 
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    for r in rows:
-        keyboard.add(InlineKeyboardButton(f"{r['base']} → {r['target']}", callback_data=f"showfav_{r['id']}"))
-    keyboard.add(InlineKeyboardButton("Назад в головне меню", callback_data="main_menu"))
-
-    await safe_edit_message(
-        callback_query.message,
-        "Твої улюблені пари:",
-        reply_markup=keyboard
-    )
+    buttons = [(f"{r['base']} → {r['target']}", f"showfav_{r['id']}") for r in rows]
+    keyboard = make_keyboard(buttons, row_width=1)
+    await safe_edit_message(callback_query.message, "Твої улюблені пари:", reply_markup=keyboard)
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('showfav_'), state="*")
 async def show_fav_from_callback(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
     fav_id = int(callback_query.data.split('_')[1])
-    rows = await list_favorites(pool, callback_query.from_user.id)
+    rows = favorites_cache.get(callback_query.from_user.id) or await update_favorites_cache(callback_query.from_user.id)
     fav = next((r for r in rows if r['id'] == fav_id), None)
     if not fav:
         await callback_query.answer("Вибрана улюблена пара не знайдена.", show_alert=True)
         return
-
     base = fav['base']
     target = fav['target']
     try:
-        data = await api_convert(base, target, 1)
-        rate = data.get('rate')
+        rate = await get_rate(base, target)
         msg = f"Курс для улюбленої пари:\n1 **{base}** = **{rate:.6f} {target}**"
-
-        keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("Конвертувати", callback_data=f"convert_from_fav_{base}_{target}"))
-        keyboard.add(InlineKeyboardButton("Видалити з улюблених", callback_data=f"delfav_{fav_id}"))
-        keyboard.add(InlineKeyboardButton("Назад до списку улюблених", callback_data="list_fav_menu"))
-
-        await safe_edit_message(
-            callback_query.message,
-            msg,
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
+        buttons = [
+            ("Конвертувати", f"convert_from_fav_{base}_{target}"),
+            ("Видалити з улюблених", f"delfav_{fav_id}")
+        ]
+        keyboard = make_keyboard(buttons, row_width=1)
+        await safe_edit_message(callback_query.message, msg, reply_markup=keyboard, parse_mode="Markdown")
     except Exception as e:
         logger.exception("convert failed")
         await bot.send_message(callback_query.message.chat.id, f"Помилка при конвертації: {e}")
     await callback_query.answer()
 
-
 @dp.callback_query_handler(lambda c: c.data.startswith('convert_from_fav_'), state="*")
 async def convert_from_fav(callback_query: types.CallbackQuery, state: FSMContext):
     _, _, _, base, target = callback_query.data.split('_')
     await state.update_data(base=base, target=target)
-    await safe_edit_message(
-        callback_query.message,
-        f"Ти обрав пару **{base}** → **{target}**.\n\nТепер введи суму, яку хочеш конвертувати:",
-        parse_mode="Markdown"
-    )
+    await safe_edit_message(callback_query.message, f"Ти обрав пару **{base}** → **{target}**.\n\nТепер введи суму, яку хочеш конвертувати:", parse_mode="Markdown")
     await ConversionStates.waiting_for_amount.set()
     await callback_query.answer()
 
@@ -247,6 +216,7 @@ async def delete_fav_from_callback(callback_query: types.CallbackQuery, state: F
     await state.finish()
     fav_id = int(callback_query.data.split('_')[1])
     res = await remove_favorite(pool, callback_query.from_user.id, fav_id)
+    await update_favorites_cache(callback_query.from_user.id)
     if res == "DELETE 1":
         await callback_query.answer("Фаворит видалено.", show_alert=True)
         await list_fav_from_menu(callback_query, state)
