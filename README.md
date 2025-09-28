@@ -29,7 +29,7 @@ The bot provides a menu for interaction but also supports commands for direct ac
 - **aiohttp** — used for asynchronous HTTP requests to currency APIs.  
 - **asyncpg** — asynchronous driver for **PostgreSQL**.  
 - **python-dotenv** — for securely storing configuration variables.
-
+- **OpenAI GPT / AI integration** — provides on-demand explanations of currency rates directly in the chat.
 ---
 
 ## ⚙️ Setup and Run
