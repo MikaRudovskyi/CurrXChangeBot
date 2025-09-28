@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import BOT_TOKEN
 from db import create_pool, init_db, upsert_user, add_favorite, list_favorites, remove_favorite
-from services import convert as api_convert
+from services import convert as api_convert, explain_rate
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -141,7 +141,8 @@ async def process_amount(message: types.Message, state: FSMContext):
             msg += f"\n\nКурс: 1 {base} = {rate:.6f} {target}"
 
         keyboard = make_keyboard([
-            (f"Додати в улюблені", f"addfav_{base}_{target}")
+            (f"Додати в улюблені", f"addfav_{base}_{target}"),
+            (f"Пояснити курс 🤖", f"explain_{base}_{target}")
         ], row_width=1, back_button=True)
 
         await message.reply(msg, reply_markup=keyboard, parse_mode="Markdown")
@@ -194,6 +195,7 @@ async def show_fav_from_callback(callback_query: types.CallbackQuery, state: FSM
         msg = f"Курс для улюбленої пари:\n1 **{base}** = **{rate:.6f} {target}**"
         buttons = [
             ("Конвертувати", f"convert_from_fav_{base}_{target}"),
+            ("Пояснити курс 🤖", f"explain_{base}_{target}"),
             ("Видалити з улюблених", f"delfav_{fav_id}")
         ]
         keyboard = make_keyboard(buttons, row_width=1)
@@ -222,6 +224,20 @@ async def delete_fav_from_callback(callback_query: types.CallbackQuery, state: F
         await list_fav_from_menu(callback_query, state)
     else:
         await callback_query.answer("Не знайдено фаворита з таким id.", show_alert=True)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("explain_"), state="*")
+async def explain_currency_rate(callback_query: types.CallbackQuery):
+    _, base, target = callback_query.data.split('_')
+    try:
+        rate = await get_rate(base, target)
+        explanation = await explain_rate(base, target, rate)
+        await bot.send_message(
+            callback_query.message.chat.id,
+            f"🤖 Ось пояснення для {base} → {target}:\n\n{explanation}"
+        )
+    except Exception as e:
+        await bot.send_message(callback_query.message.chat.id, f"Помилка при поясненні: {e}")
+    await callback_query.answer()
 
 async def on_startup(dp):
     global pool

@@ -1,6 +1,9 @@
 import aiohttp
+import os
+from openai import AsyncOpenAI
+from config import API_BASE
 
-API_BASE = "https://v6.exchangerate-api.com/v6/1f66b6bb41c2ea4408ea21a5/latest"
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 async def convert(base: str, target: str, amount: float = 1.0):
     url = f"{API_BASE}/{base.upper()}"
@@ -19,3 +22,18 @@ async def convert(base: str, target: str, amount: float = 1.0):
             rate = rates[target.upper()]
             result = amount * rate
             return {"result": result, "rate": rate}
+
+async def explain_rate(base: str, target: str, rate: float):
+    prompt = f"""
+    Ти фінансовий аналітик. Курс {base} → {target} зараз {rate:.4f}.
+    Поясни коротко, які можуть бути причини такого курсу і чи він вигідний для звичайної людини.
+    Пиши простою мовою, максимум 4 речення.
+    """
+
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.6
+    )
+
+    return response.choices[0].message.content.strip()
