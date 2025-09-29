@@ -1,4 +1,3 @@
-# bot.py (updated)
 import logging
 import time
 import asyncio
