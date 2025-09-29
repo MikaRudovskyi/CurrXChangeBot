@@ -10,7 +10,7 @@
 - **Up-to-date exchange rates** — the bot fetches the latest data for accurate calculations.  
 - **Save favorite pairs** — add or remove favorite currency pairs for quick access.  
 - **Database support** — uses **PostgreSQL** to reliably store user data and favorite pairs.
-
+- **AI-powered explanations** — get brief, easy-to-understand insights about why a currency rate is at its current level, using AI (OpenAI GPT).
 ---
 
 ## ⚡ Usage
@@ -29,7 +29,7 @@ The bot provides a menu for interaction but also supports commands for direct ac
 - **aiohttp** — used for asynchronous HTTP requests to currency APIs.  
 - **asyncpg** — asynchronous driver for **PostgreSQL**.  
 - **python-dotenv** — for securely storing configuration variables.
-
+- **OpenAI GPT / AI integration** — provides on-demand explanations of currency rates directly in the chat.
 ---
 
 ## ⚙️ Setup and Run
@@ -53,6 +53,8 @@ The bot provides a menu for interaction but also supports commands for direct ac
     ```
     BOT_TOKEN=YOUR_BOT_TOKEN
     DATABASE_URL=postgres://user:password@host:port/dbname
+    API_BASE=YOUR_API_EXCHANGE_TOKEN
+    OPENAI_API_KEY=YOUR_OPENAI_API_KEY
     ```
 5.  **Run the bot:**
     ```bash
